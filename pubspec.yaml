@@ -1,0 +1,15 @@
+name: son
+description: A binary encoding format for JSON data that supports a focused subset of Dart types.
+version: 0.1.0
+repository: https://github.com/cardinal-run/son
+issue_tracker: https://github.com/cardinal-run/son/issues
+topics: [json, encoding, decoding, binary]
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+
+dev_dependencies:
+  meta: ^1.16.0
+  mocktail: ^1.0.4
+  test: ^1.25.7
+  very_good_analysis: ^7.0.0
