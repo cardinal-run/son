@@ -88,7 +88,7 @@ void main() {
     try {
       son.encode(Object());
       fail('Magically able to encode non-codable objects');
-    } catch (err) {
+    } on Exception catch (err) {
       expect(
         err,
         isA<SonUnsupportedObjectException>().having(
