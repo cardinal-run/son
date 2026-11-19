@@ -90,6 +90,21 @@ void main() {
     }
   });
 
+  test('Encode/decode null inside lists and maps', () {
+    for (final value in [
+      [null, 1],
+      [null, null, 'a'],
+      {'k': null, 'j': 2},
+    ]) {
+      expect(son.decode(son.encode(value)), equals(value));
+      const withDictionary = Son(withDictionary: true);
+      expect(
+        withDictionary.decode(withDictionary.encode(value)),
+        equals(value),
+      );
+    }
+  });
+
   test('Encode/decode typed data view', () {
     final buffer = Uint16List.fromList(List.generate(100, (i) => i));
     final view = Uint16List.sublistView(buffer, 10, 13);

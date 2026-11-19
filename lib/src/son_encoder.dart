@@ -18,151 +18,143 @@ class SonEncoder extends Converter<Object?, Uint8List> {
   @override
   Uint8List convert(Object? input) {
     if (input is Dictionary) return _convertDictionary(input);
-    final context = (
-      input,
-      BytesBuilder(copy: false),
-      withDictionary ? Dictionary() : null
-    );
-    _convert(context);
-    return context.toBytes();
+    final writer = _Writer(withDictionary ? Dictionary() : null);
+    _convert(input, writer);
+
+    final data = writer.takeBytes();
+    final dictionary = writer.dictionary;
+    if (dictionary == null) return data;
+    return (BytesBuilder(copy: false)
+          ..add(dictionary.toBytes())
+          ..add(data))
+        .takeBytes();
   }
 
   Uint8List _convertDictionary(Dictionary dictionary) {
-    final data = BytesBuilder(copy: false);
-    _convertMap((dictionary.map, data, null));
-    return data.toBytes();
+    final writer = _Writer(null);
+    _convertMap(dictionary.map, writer);
+    return writer.takeBytes();
   }
 
-  void _convert(EncodeContext<Object?> context) {
-    if (context.input == null) {
-      // 0 0 0 0
-      context.write(0);
-    } else if (context is EncodeContext<bool>) {
-      // 1 0 0 0
-      _convertBool(context);
-    } else if (context is EncodeContext<int>) {
-      // 0 1 0 0
-      _convertInt(context);
-    } else if (context is EncodeContext<double>) {
-      // 0 0 1 0
-      _convertDouble(context);
-    } else if (context is EncodeContext<ByteBuffer>) {
-      // 0 0 1 1 0 0 0 0
-      _convertByteBuffer(context);
-    } else if (context is EncodeContext<TypedData>) {
-      // 0 0 1 1 x x x x
-      _convertTypedData(context);
-    } else if (context is EncodeContext<Iterable>) {
-      // 0 0 0 1
-      _convertIterable(context);
-    } else if (context is EncodeContext<String>) {
-      // 1 1 0 0
-      _convertString(context);
-    } else if (context is EncodeContext<Map>) {
-      // 1 1 1 0
-      _convertMap(context);
-    } else {
-      _convertObject(context);
+  void _convert(Object? input, _Writer writer) {
+    switch (input) {
+      case null:
+        // 0 0 0 0
+        writer.byte(0);
+      case bool():
+        // 1 0 0 0
+        _convertBool(input, writer);
+      case int():
+        // 0 1 0 0
+        _convertInt(input, writer);
+      case double():
+        // 0 0 1 0
+        _convertDouble(input, writer);
+      case ByteBuffer():
+        // 0 0 1 1 0 0 0 0
+        _convertByteBuffer(input, writer);
+      case TypedData():
+        // 0 0 1 1 x x x x
+        _convertTypedData(input, writer);
+      case Iterable<dynamic>():
+        // 0 0 0 1
+        _convertIterable(input, writer);
+      case String():
+        // 1 1 0 0
+        _convertString(input, writer);
+      case Map<dynamic, dynamic>():
+        // 1 1 1 0
+        _convertMap(input, writer);
+      default:
+        _convertObject(input, writer);
     }
   }
 
-  void _convertBool(EncodeContext<bool> context) {
+  void _convertBool(bool input, _Writer writer) {
     var header = 1 << 3;
-    header |= (context.input ? 1 : 0) << 4;
-    context.write(header);
+    header |= (input ? 1 : 0) << 4;
+    writer.byte(header);
   }
 
-  void _convertInt(EncodeContext<int> context) {
-    var header = 1 << 2;
-    header |= switch (context.input) {
-      <= 127 && >= -128 => 1 << 4, // 8 bit,
-      <= 32766 && >= -32767 => 1 << 5, // 16 bit,
-      <= 2147483647 && >= -2147483648 => 1 << 6, // 32 bit,
-      _ => 1 << 7, // 64 bit
+  void _convertInt(int input, _Writer writer) {
+    final length = switch (input) {
+      <= 127 && >= -128 => 1, // 8 bit,
+      <= 32766 && >= -32767 => 2, // 16 bit,
+      <= 2147483647 && >= -2147483648 => 4, // 32 bit,
+      _ => 8, // 64 bit
     };
 
-    final byteData = switch (context.input) {
-      <= 127 && >= -128 => context.input.int8,
-      <= 32766 && >= -32767 => context.input.int16,
-      <= 2147483647 && >= -2147483648 => context.input.int32,
-      _ => context.input.int64,
-    };
-
-    context
-      ..write(header)
-      ..writeAll(byteData);
+    // The length in bytes is also the bit flag: 1 << 4, 1 << 5, ...
+    writer
+      ..byte(1 << 2 | length << 4)
+      ..signed(input, length);
   }
 
-  void _convertDouble(EncodeContext<double> context) {
-    final fitsFloat32 =
-        (Float32List(1)..[0] = context.input)[0] == context.input;
+  void _convertDouble(double input, _Writer writer) {
+    final fitsFloat32 = writer.fitsFloat32(input);
 
     var header = 1 << 1;
     header |= fitsFloat32 ? 1 << 4 : 1 << 5;
 
-    final byteData =
-        fitsFloat32 ? context.input.float32 : context.input.float64;
-
-    context
-      ..write(header)
-      ..writeAll(byteData);
+    writer
+      ..byte(header)
+      ..float(input, fitsFloat32 ? 4 : 8);
   }
 
-  void _convertString(EncodeContext<String> context) {
+  void _convertString(String input, _Writer writer) {
     var header = 1 << 3;
     header |= 1 << 2;
 
-    if (withDictionary && context.dictionary != null) {
-      final index = context.dictionary!.add(context.input);
-      context.write(header);
-      _convertUint(index, context.$2);
+    final dictionary = writer.dictionary;
+    if (withDictionary && dictionary != null) {
+      final index = dictionary.add(input);
+      writer.byte(header);
+      _convertUint(index, writer);
     } else {
-      final bytes = utf8.encode(context.input);
-      if (context.input.isNotEmpty && bytes.length <= 15) {
+      final bytes = utf8.encode(input);
+      if (input.isNotEmpty && bytes.length <= 15) {
         header |= (bytes.length << 4) & 0xF0;
-        context.write(header);
+        writer.byte(header);
       } else {
-        context.write(header);
-        _convertUint(bytes.length, context.$2);
+        writer.byte(header);
+        _convertUint(bytes.length, writer);
       }
 
-      context.writeAll(bytes);
+      writer.bytes(bytes);
     }
   }
 
-  void _convertMap(EncodeContext<Map<dynamic, dynamic>> context) {
+  void _convertMap(Map<dynamic, dynamic> input, _Writer writer) {
     var header = 1 << 3;
     header |= 1 << 2;
     header |= 1 << 1;
 
-    if (context.input.isNotEmpty && context.input.length <= 15) {
-      header |= (context.input.length << 4) & 0xF0;
-      context.write(header);
+    if (input.isNotEmpty && input.length <= 15) {
+      header |= (input.length << 4) & 0xF0;
+      writer.byte(header);
     } else {
-      context.write(header);
-      _convertUint(context.input.length, context.$2);
+      writer.byte(header);
+      _convertUint(input.length, writer);
     }
 
-    for (final entry in context.input.entries) {
-      _convert(context.from(entry.key));
-      _convert(context.from(entry.value));
+    for (final entry in input.entries) {
+      _convert(entry.key, writer);
+      _convert(entry.value, writer);
     }
   }
 
-  void _convertIterable(EncodeContext<Iterable<dynamic>> context) {
+  void _convertIterable(Iterable<dynamic> input, _Writer writer) {
     const header = 1 << 0;
 
-    context.write(header);
-    _convertUint(context.input.length, context.$2);
+    writer.byte(header);
+    _convertUint(input.length, writer);
 
-    for (final value in context.input) {
-      _convert(context.from(value));
+    for (final value in input) {
+      _convert(value, writer);
     }
   }
 
-  void _convertTypedData(EncodeContext<TypedData> context) {
-    final data = context.input;
-
+  void _convertTypedData(TypedData data, _Writer writer) {
     // Encode that it is a typed data.
     var header = 1 << 0;
     header |= 1 << 1;
@@ -193,127 +185,125 @@ class SonEncoder extends Converter<Object?, Uint8List> {
     // Encode the type of the typed data list.
     header |= (type << 4) & 0xF0;
 
-    context.write(header);
-    _convertUint(data.lengthInBytes, context.$2);
+    writer.byte(header);
+    _convertUint(data.lengthInBytes, writer);
 
-    context.writeAll(
+    writer.bytes(
       data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
     );
   }
 
-  void _convertByteBuffer(EncodeContext<ByteBuffer> context) {
+  void _convertByteBuffer(ByteBuffer input, _Writer writer) {
     var header = 1 << 0;
     header |= 1 << 1;
 
-    context.write(header);
-    _convertUint(context.input.lengthInBytes, context.$2);
+    writer.byte(header);
+    _convertUint(input.lengthInBytes, writer);
 
-    context.writeAll(context.input.asUint8List());
+    writer.bytes(input.asUint8List());
   }
 
-  void _convertObject<T extends Object?>(EncodeContext<T> context) {
+  void _convertObject(Object? input, _Writer writer) {
     for (final convert in [
-      () => ((context.input as dynamic).toJson as Object? Function())(),
-      () => ((context.input as dynamic).toMap as Object? Function())(),
+      () => ((input as dynamic).toJson as Object? Function())(),
+      () => ((input as dynamic).toMap as Object? Function())(),
     ]) {
       try {
-        return _convert(context.from(convert()));
+        return _convert(convert(), writer);
       } catch (err) {
         if (err is NoSuchMethodError) continue;
-        throw SonUnsupportedObjectException(context.$1, cause: err);
+        throw SonUnsupportedObjectException(input, cause: err);
       }
     }
 
-    throw SonUnsupportedObjectException(context.$1);
+    throw SonUnsupportedObjectException(input);
   }
 
-  void _convertUint(int input, BytesBuilder builder) {
-    var header = 1 << 2;
-    header |= switch (input) {
-      <= 0xFF => 1 << 4, // 8 bit,
-      <= 0xFFFF => 1 << 5, // 16 bit,
+  void _convertUint(int input, _Writer writer) {
+    final length = switch (input) {
+      <= 0xFF => 1, // 8 bit,
+      <= 0xFFFF => 2, // 16 bit,
 
       // Untested but follows the same logic as above.
       // coverage:ignore-start
-      <= 0xFFFFFFFF => 1 << 6, // 32 bit,
-      _ => 1 << 7, // 64 bit
+      <= 0xFFFFFFFF => 4, // 32 bit,
+      _ => 8, // 64 bit
       // coverage:ignore-end
     };
 
-    final byteData = switch (input) {
-      <= 0xFF => input.uint8,
-      <= 0xFFFF => input.uint16,
+    // The length in bytes is also the bit flag: 1 << 4, 1 << 5, ...
+    writer
+      ..byte(1 << 2 | length << 4)
+      ..unsigned(input, length);
+  }
+}
 
+class _Writer {
+  _Writer(this.dictionary);
+
+  final Dictionary? dictionary;
+
+  // Copying explicit, so that small writes go into one buffer and the scratch
+  //can be reused.
+  // ignore: avoid_redundant_argument_values
+  final _builder = BytesBuilder(copy: true);
+  final _scratch = ByteData(8);
+  late final _scratchBytes = _scratch.buffer.asUint8List();
+
+  void byte(int value) => _builder.addByte(value);
+
+  void bytes(Uint8List value) => _builder.add(value);
+
+  void signed(int value, int length) {
+    switch (length) {
+      case 1:
+        _scratch.setInt8(0, value);
+      case 2:
+        _scratch.setInt16(0, value);
+      case 4:
+        _scratch.setInt32(0, value);
+      default:
+        _scratch.setInt64(0, value);
+    }
+    _flush(length);
+  }
+
+  void unsigned(int value, int length) {
+    switch (length) {
+      case 1:
+        _scratch.setUint8(0, value);
+      case 2:
+        _scratch.setUint16(0, value);
       // Untested but follows the same logic as above.
       // coverage:ignore-start
-      <= 0xFFFFFFFF => input.uint32,
-      _ => input.uint64,
+      case 4:
+        _scratch.setUint32(0, value);
+      default:
+        _scratch.setUint64(0, value);
       // coverage:ignore-end
-    };
-
-    builder
-      ..addByte(header)
-      ..add(byteData);
+    }
+    _flush(length);
   }
-}
 
-extension on int {
-  Uint8List get uint8 =>
-      Uint8List(1)..buffer.asByteData(0, 1).setUint8(0, this);
-
-  Uint8List get uint16 =>
-      Uint8List(2)..buffer.asByteData(0, 2).setUint16(0, this);
-
-  // Untested but follows the same logic as above.
-  // coverage:ignore-start
-  Uint8List get uint32 =>
-      Uint8List(4)..buffer.asByteData(0, 4).setUint32(0, this);
-
-  Uint8List get uint64 =>
-      Uint8List(8)..buffer.asByteData(0, 8).setUint64(0, this);
-  // coverage:ignore-end
-
-  Uint8List get int8 => Uint8List(1)..buffer.asByteData(0, 1).setInt8(0, this);
-
-  Uint8List get int16 =>
-      Uint8List(2)..buffer.asByteData(0, 2).setInt16(0, this);
-
-  Uint8List get int32 =>
-      Uint8List(4)..buffer.asByteData(0, 4).setInt32(0, this);
-
-  Uint8List get int64 =>
-      Uint8List(8)..buffer.asByteData(0, 8).setInt64(0, this);
-}
-
-extension on double {
-  Uint8List get float32 =>
-      Uint8List(4)..buffer.asByteData(0, 4).setFloat32(0, this);
-
-  Uint8List get float64 =>
-      Uint8List(8)..buffer.asByteData(0, 8).setFloat64(0, this);
-}
-
-/// Context used for encoding.
-typedef EncodeContext<I extends Object?> = (
-  I input,
-  BytesBuilder data,
-  Dictionary? dictionary,
-);
-
-extension<I extends Object?> on EncodeContext<I> {
-  I get input => $1;
-  Dictionary? get dictionary => $3;
-
-  void write(int byte) => $2.addByte(byte);
-
-  void writeAll(Uint8List bytes) => $2.add(bytes);
-
-  EncodeContext<T> from<T extends Object?>(T input) => (input, $2, $3);
-
-  Uint8List toBytes() {
-    final builder = BytesBuilder();
-    if ($3 != null) builder.add($3!.toBytes());
-    builder.add($2.toBytes());
-    return builder.toBytes();
+  bool fitsFloat32(double value) {
+    _scratch.setFloat32(0, value);
+    return _scratch.getFloat32(0) == value;
   }
+
+  void float(double value, int length) {
+    if (length == 4) {
+      _scratch.setFloat32(0, value);
+    } else {
+      _scratch.setFloat64(0, value);
+    }
+    _flush(length);
+  }
+
+  void _flush(int length) {
+    for (var i = 0; i < length; i++) {
+      _builder.addByte(_scratchBytes[i]);
+    }
+  }
+
+  Uint8List takeBytes() => _builder.takeBytes();
 }

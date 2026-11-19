@@ -22,9 +22,10 @@ class Dictionary {
 
   /// Add the [value] and return it's reference identifier.
   int add(String value) {
-    final key = _stringToIndex[value] ??= _count++;
-    _indexToString[key] = value;
-    return key;
+    final existing = _stringToIndex[value];
+    if (existing != null) return existing;
+    _indexToString[_count] = value;
+    return _stringToIndex[value] = _count++;
   }
 
   /// Get a string by it's reference identifier.
