@@ -105,7 +105,14 @@ class SonDecoder extends Converter<Uint8List, Object?> {
     var length = header >> 4;
     if (length == 0) length = _convertUint(reader);
     final offset = reader.skip(length);
-    return utf8.decoder.convert(reader.bytes, offset, offset + length);
+    final end = offset + length;
+    // ASCII bytes are their own code units, so they skip the UTF-8 decoder.
+    for (var i = offset; i < end; i++) {
+      if (reader.bytes[i] > 0x7F) {
+        return utf8.decoder.convert(reader.bytes, offset, end);
+      }
+    }
+    return String.fromCharCodes(reader.bytes, offset, end);
   }
 
   Map<dynamic, dynamic> _convertMap(_Reader reader, int header) {
@@ -119,7 +126,12 @@ class SonDecoder extends Converter<Uint8List, Object?> {
 
   Iterable<dynamic> _convertIterable(_Reader reader) {
     final length = _convertUint(reader);
-    return [for (var i = 0; i < length; i++) _convert(reader)];
+    // Sized up front, so the list does not grow step by step.
+    final list = List<dynamic>.filled(length, null, growable: true);
+    for (var i = 0; i < length; i++) {
+      list[i] = _convert(reader);
+    }
+    return list;
   }
 
   TypedData _convertTypedData(_Reader reader, int header) {

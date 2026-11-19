@@ -41,6 +41,9 @@ class SonEncoder extends Converter<Object?, Uint8List> {
       case null:
         // 0 0 0 0
         writer.byte(0);
+      case String():
+        // 1 1 0 0
+        _convertString(input, writer);
       case bool():
         // 1 0 0 0
         _convertBool(input, writer);
@@ -59,9 +62,6 @@ class SonEncoder extends Converter<Object?, Uint8List> {
       case Iterable<dynamic>():
         // 0 0 0 1
         _convertIterable(input, writer);
-      case String():
-        // 1 1 0 0
-        _convertString(input, writer);
       case Map<dynamic, dynamic>():
         // 1 1 1 0
         _convertMap(input, writer);
@@ -85,18 +85,12 @@ class SonEncoder extends Converter<Object?, Uint8List> {
     };
 
     // The length in bytes is also the bit flag: 1 << 4, 1 << 5, ...
-    writer
-      ..byte(1 << 2 | length << 4)
-      ..signed(input, length);
+    writer.signed(1 << 2 | length << 4, input, length);
   }
 
   void _convertDouble(double input, _Writer writer) {
-    final at = writer.reserve(1);
-    final length = writer.float(input);
-
-    var header = 1 << 1;
-    header |= length == 4 ? 1 << 4 : 1 << 5;
-    writer.patch(at, header);
+    const header = 1 << 1;
+    writer.float(header | 1 << 4, header | 1 << 5, input);
   }
 
   void _convertString(String input, _Writer writer) {
@@ -243,9 +237,7 @@ class SonEncoder extends Converter<Object?, Uint8List> {
     };
 
     // The length in bytes is also the bit flag: 1 << 4, 1 << 5, ...
-    writer
-      ..byte(1 << 2 | length << 4)
-      ..unsigned(input, length);
+    writer.unsigned(1 << 2 | length << 4, input, length);
   }
 }
 
@@ -279,9 +271,6 @@ class _Writer {
     _buffer[at] = value;
   }
 
-  /// Overwrites the byte at [at], which [reserve] returned before.
-  void patch(int at, int value) => _buffer[at] = value;
-
   void bytes(Uint8List value) {
     final start = reserve(value.length);
     _buffer.setRange(start, start + value.length, value);
@@ -295,46 +284,53 @@ class _Writer {
     }
   }
 
-  void signed(int value, int length) {
-    final at = reserve(length);
+  /// Writes [header] and then [value] as a signed int of [length] bytes.
+  void signed(int header, int value, int length) {
+    final at = reserve(1 + length);
+    _buffer[at] = header;
     switch (length) {
       case 1:
-        _data.setInt8(at, value);
+        _data.setInt8(at + 1, value);
       case 2:
-        _data.setInt16(at, value);
+        _data.setInt16(at + 1, value);
       case 4:
-        _data.setInt32(at, value);
+        _data.setInt32(at + 1, value);
       default:
-        _data.setInt64(at, value);
+        _data.setInt64(at + 1, value);
     }
   }
 
-  void unsigned(int value, int length) {
-    final at = reserve(length);
+  /// Writes [header] and then [value] as an unsigned int of [length] bytes.
+  void unsigned(int header, int value, int length) {
+    final at = reserve(1 + length);
+    _buffer[at] = header;
     switch (length) {
       case 1:
-        _data.setUint8(at, value);
+        _data.setUint8(at + 1, value);
       case 2:
-        _data.setUint16(at, value);
+        _data.setUint16(at + 1, value);
       // Untested but follows the same logic as above.
       // coverage:ignore-start
       case 4:
-        _data.setUint32(at, value);
+        _data.setUint32(at + 1, value);
       default:
-        _data.setUint64(at, value);
+        _data.setUint64(at + 1, value);
       // coverage:ignore-end
     }
   }
 
-  /// Writes [value] as float32 if that keeps its exact value, otherwise as
-  /// float64, and returns the length in bytes.
-  int float(double value) {
-    final at = reserve(4);
-    _data.setFloat32(at, value);
-    if (_data.getFloat32(at) == value) return 4;
-    reserve(4);
-    _data.setFloat64(at, value);
-    return 8;
+  /// Writes [value] as float32 with [header32] if that keeps its exact value,
+  /// otherwise as float64 with [header64].
+  void float(int header32, int header64, double value) {
+    final at = reserve(9);
+    _data.setFloat32(at + 1, value);
+    if (_data.getFloat32(at + 1) == value) {
+      _buffer[at] = header32;
+      _length -= 4;
+    } else {
+      _buffer[at] = header64;
+      _data.setFloat64(at + 1, value);
+    }
   }
 
   /// The view shares the buffer, as `BytesBuilder.takeBytes` does.

@@ -10,26 +10,26 @@ class Dictionary {
   /// {@macro dictionary}
   Dictionary([Map<String, int>? map])
       : _stringToIndex = map ?? HashMap(),
-        _indexToString = (map ?? HashMap()).map((k, v) => MapEntry(v, k)),
-        _count = map?.length ?? 0;
+        _indexToString = _invert(map);
 
   /// Map of strings and their indices.
   Map<String, int> get map => _stringToIndex;
   final Map<String, int> _stringToIndex;
-  final Map<int, String> _indexToString;
 
-  int _count;
+  final List<String> _indexToString;
 
-  /// Add the [value] and return it's reference identifier.
-  int add(String value) {
-    final existing = _stringToIndex[value];
-    if (existing != null) return existing;
-    _indexToString[_count] = value;
-    return _stringToIndex[value] = _count++;
+  static List<String> _invert(Map<String, int>? map) {
+    final list = List<String>.filled(map?.length ?? 0, '', growable: true);
+    map?.forEach((string, index) => list[index] = string);
+    return list;
   }
 
+  /// Add the [value] and return it's reference identifier.
+  int add(String value) =>
+      _stringToIndex[value] ??= (_indexToString..add(value)).length - 1;
+
   /// Get a string by it's reference identifier.
-  String get(int value) => _indexToString[value]!;
+  String get(int value) => _indexToString[value];
 
   /// Encode the dictionary to binary using the SON encoder.
   Uint8List toBytes() => const SonEncoder(withDictionary: false).convert(this);
