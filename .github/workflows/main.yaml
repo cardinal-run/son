@@ -25,3 +25,41 @@ jobs:
     uses: VeryGoodOpenSource/very_good_workflows/.github/workflows/dart_package.yml@v1
     with:
       check_ignore: true
+
+  benchmark:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dart-lang/setup-dart@v1
+
+      - name: Compare performance against base
+        id: benchmark
+        shell: bash
+        run: dart run benchmark/run.dart --base=${{ github.event.pull_request.base.sha }} | tee benchmark.md
+
+      - name: Comment results on the PR
+        if: always() && hashFiles('benchmark.md') != ''
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          cat benchmark.md >> "$GITHUB_STEP_SUMMARY"
+
+          # Add a hidden marker.
+          marker='<!-- son-benchmark -->'
+          { echo "$marker"; cat benchmark.md; } > comment.md
+          
+          id=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
+            --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"$marker\"))) | .id" | head -n 1)
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -F body=@comment.md > /dev/null
+          else
+            gh pr comment "$PR" --body-file comment.md
+          fi
