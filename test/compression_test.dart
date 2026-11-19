@@ -24,7 +24,7 @@ void main() {
 
   testCompression(
     'Compresses float32',
-    0xFFFFFFF.toDouble(),
+    0x10000000.toDouble(), // 2^28, exact in float32.
     compression: 0.54,
   );
 

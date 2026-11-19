@@ -84,6 +84,25 @@ void main() {
 
   testEncodeAndDecode('ByteBuffer', Uint8List.fromList(listOf(0)).buffer);
 
+  test('Encode/decode keeps double precision', () {
+    for (final value in [0.1, 1 / 3, 200.5, double.infinity]) {
+      expect(son.decode(son.encode(value)), equals(value));
+    }
+  });
+
+  test('Encode/decode typed data view', () {
+    final buffer = Uint16List.fromList(List.generate(100, (i) => i));
+    final view = Uint16List.sublistView(buffer, 10, 13);
+    expect(son.decode(son.encode(view)), equals([10, 11, 12]));
+    expect(
+      son.decode(son.encode([view, 'after'])),
+      equals([
+        [10, 11, 12],
+        'after',
+      ]),
+    );
+  });
+
   test('can not encode non-codable object', () {
     try {
       son.encode(Object());

@@ -94,16 +94,14 @@ class SonEncoder extends Converter<Object?, Uint8List> {
   }
 
   void _convertDouble(EncodeContext<double> context) {
-    var header = 1 << 1;
-    header |= switch (context.input) {
-      >= -2147483648 && <= 2147483647 => 1 << 4, // 32 bit
-      _ => 1 << 5, // 64 bit
-    };
+    final fitsFloat32 =
+        (Float32List(1)..[0] = context.input)[0] == context.input;
 
-    final byteData = switch (context.input) {
-      >= -2147483648 && <= 2147483647 => context.input.float32,
-      _ => context.input.float64,
-    };
+    var header = 1 << 1;
+    header |= fitsFloat32 ? 1 << 4 : 1 << 5;
+
+    final byteData =
+        fitsFloat32 ? context.input.float32 : context.input.float64;
 
     context
       ..write(header)
@@ -198,7 +196,9 @@ class SonEncoder extends Converter<Object?, Uint8List> {
     context.write(header);
     _convertUint(data.lengthInBytes, context.$2);
 
-    context.writeAll(data.buffer.asUint8List());
+    context.writeAll(
+      data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
+    );
   }
 
   void _convertByteBuffer(EncodeContext<ByteBuffer> context) {
