@@ -91,14 +91,12 @@ class SonEncoder extends Converter<Object?, Uint8List> {
   }
 
   void _convertDouble(double input, _Writer writer) {
-    final fitsFloat32 = writer.fitsFloat32(input);
+    final at = writer.reserve(1);
+    final length = writer.float(input);
 
     var header = 1 << 1;
-    header |= fitsFloat32 ? 1 << 4 : 1 << 5;
-
-    writer
-      ..byte(header)
-      ..float(input, fitsFloat32 ? 4 : 8);
+    header |= length == 4 ? 1 << 4 : 1 << 5;
+    writer.patch(at, header);
   }
 
   void _convertString(String input, _Writer writer) {
@@ -111,17 +109,29 @@ class SonEncoder extends Converter<Object?, Uint8List> {
       writer.byte(header);
       _convertUint(index, writer);
     } else {
-      final bytes = utf8.encode(input);
-      if (input.isNotEmpty && bytes.length <= 15) {
-        header |= (bytes.length << 4) & 0xF0;
+      final bytes = _isAscii(input) ? null : utf8.encode(input);
+      final length = bytes?.length ?? input.length;
+      if (input.isNotEmpty && length <= 15) {
+        header |= (length << 4) & 0xF0;
         writer.byte(header);
       } else {
         writer.byte(header);
-        _convertUint(bytes.length, writer);
+        _convertUint(length, writer);
       }
 
-      writer.bytes(bytes);
+      if (bytes == null) {
+        writer.ascii(input);
+      } else {
+        writer.bytes(bytes);
+      }
     }
+  }
+
+  static bool _isAscii(String input) {
+    for (var i = 0; i < input.length; i++) {
+      if (input.codeUnitAt(i) > 0x7F) return false;
+    }
+    return true;
   }
 
   void _convertMap(Map<dynamic, dynamic> input, _Writer writer) {
@@ -137,10 +147,11 @@ class SonEncoder extends Converter<Object?, Uint8List> {
       _convertUint(input.length, writer);
     }
 
-    for (final entry in input.entries) {
-      _convert(entry.key, writer);
-      _convert(entry.value, writer);
-    }
+    // forEach does not make a MapEntry per entry, as `entries` does.
+    input.forEach((key, value) {
+      _convert(key, writer);
+      _convert(value, writer);
+    });
   }
 
   void _convertIterable(Iterable<dynamic> input, _Writer writer) {
@@ -243,67 +254,89 @@ class _Writer {
 
   final Dictionary? dictionary;
 
-  // Copying explicit, so that small writes go into one buffer and the scratch
-  //can be reused.
-  // ignore: avoid_redundant_argument_values
-  final _builder = BytesBuilder(copy: true);
-  final _scratch = ByteData(8);
-  late final _scratchBytes = _scratch.buffer.asUint8List();
+  var _buffer = Uint8List(1024);
+  late var _data = ByteData.sublistView(_buffer);
+  var _length = 0;
 
-  void byte(int value) => _builder.addByte(value);
+  /// Makes room for [count] more bytes and returns where they start.
+  int reserve(int count) {
+    final start = _length;
+    if (start + count > _buffer.length) {
+      var capacity = _buffer.length * 2;
+      while (capacity < start + count) {
+        capacity *= 2;
+      }
+      _buffer = Uint8List(capacity)..setRange(0, start, _buffer);
+      _data = ByteData.sublistView(_buffer);
+    }
+    _length += count;
+    return start;
+  }
 
-  void bytes(Uint8List value) => _builder.add(value);
+  void byte(int value) {
+    // Reserve first: it can replace `_buffer`.
+    final at = reserve(1);
+    _buffer[at] = value;
+  }
+
+  /// Overwrites the byte at [at], which [reserve] returned before.
+  void patch(int at, int value) => _buffer[at] = value;
+
+  void bytes(Uint8List value) {
+    final start = reserve(value.length);
+    _buffer.setRange(start, start + value.length, value);
+  }
+
+  /// Writes the code units of [value], which must be ASCII.
+  void ascii(String value) {
+    final start = reserve(value.length);
+    for (var i = 0; i < value.length; i++) {
+      _buffer[start + i] = value.codeUnitAt(i);
+    }
+  }
 
   void signed(int value, int length) {
+    final at = reserve(length);
     switch (length) {
       case 1:
-        _scratch.setInt8(0, value);
+        _data.setInt8(at, value);
       case 2:
-        _scratch.setInt16(0, value);
+        _data.setInt16(at, value);
       case 4:
-        _scratch.setInt32(0, value);
+        _data.setInt32(at, value);
       default:
-        _scratch.setInt64(0, value);
+        _data.setInt64(at, value);
     }
-    _flush(length);
   }
 
   void unsigned(int value, int length) {
+    final at = reserve(length);
     switch (length) {
       case 1:
-        _scratch.setUint8(0, value);
+        _data.setUint8(at, value);
       case 2:
-        _scratch.setUint16(0, value);
+        _data.setUint16(at, value);
       // Untested but follows the same logic as above.
       // coverage:ignore-start
       case 4:
-        _scratch.setUint32(0, value);
+        _data.setUint32(at, value);
       default:
-        _scratch.setUint64(0, value);
+        _data.setUint64(at, value);
       // coverage:ignore-end
     }
-    _flush(length);
   }
 
-  bool fitsFloat32(double value) {
-    _scratch.setFloat32(0, value);
-    return _scratch.getFloat32(0) == value;
+  /// Writes [value] as float32 if that keeps its exact value, otherwise as
+  /// float64, and returns the length in bytes.
+  int float(double value) {
+    final at = reserve(4);
+    _data.setFloat32(at, value);
+    if (_data.getFloat32(at) == value) return 4;
+    reserve(4);
+    _data.setFloat64(at, value);
+    return 8;
   }
 
-  void float(double value, int length) {
-    if (length == 4) {
-      _scratch.setFloat32(0, value);
-    } else {
-      _scratch.setFloat64(0, value);
-    }
-    _flush(length);
-  }
-
-  void _flush(int length) {
-    for (var i = 0; i < length; i++) {
-      _builder.addByte(_scratchBytes[i]);
-    }
-  }
-
-  Uint8List takeBytes() => _builder.takeBytes();
+  /// The view shares the buffer, as `BytesBuilder.takeBytes` does.
+  Uint8List takeBytes() => Uint8List.sublistView(_buffer, 0, _length);
 }
