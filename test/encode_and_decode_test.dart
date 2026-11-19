@@ -90,6 +90,42 @@ void main() {
     }
   });
 
+  test('Encode/decode null inside lists and maps', () {
+    for (final value in [
+      [null, 1],
+      [null, null, 'a'],
+      {'k': null, 'j': 2},
+    ]) {
+      expect(son.decode(son.encode(value)), equals(value));
+      const withDictionary = Son(withDictionary: true);
+      expect(
+        withDictionary.decode(withDictionary.encode(value)),
+        equals(value),
+      );
+    }
+  });
+
+  test('Encode/decode values that grow the output buffer', () {
+    final value = [
+      for (var i = 0; i < 5000; i++) [i, 'item $i', i / 3],
+    ];
+    expect(son.decode(son.encode(value)), equals(value));
+  });
+
+  test('Encode/decode non-ASCII strings', () {
+    for (final value in ['héllo wörld ✨', '日本語' * 10, '\u007f\u0080']) {
+      expect(son.decode(son.encode(value)), equals(value));
+    }
+  });
+
+  test('Decoding truncated data throws', () {
+    final encoded = son.encode('a longer string than fifteen bytes');
+    expect(
+      () => son.decode(Uint8List.sublistView(encoded, 0, encoded.length - 1)),
+      throwsStateError,
+    );
+  });
+
   test('Encode/decode typed data view', () {
     final buffer = Uint16List.fromList(List.generate(100, (i) => i));
     final view = Uint16List.sublistView(buffer, 10, 13);
